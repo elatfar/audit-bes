@@ -338,15 +338,15 @@ var dimensions    = [];   // [{name, icon, questions:[]}, ...]
 var currentStep   = 0;    // 0 = profil, 1..N = dimensi ke-N
 var totalSteps    = 0;    // diset setelah questions dimuat
 var dimIcons      = ["📋","📊","⚙️","💰","👥","📦","🔄","📈","🛡️","🎯"];
+var currentAuditId = null; // Menyimpan ID Audit unik dari langkah awal profil
 
 // ─── INIT ─────────────────────────────────────────────────────
-// Ganti URL ini dengan URL Web App Apps Script Anda yang baru
-const API_URL = "https://script.google.com/macros/s/AKfycbz37G-QhJQtbp7KRlyoiq1-AzSz8OubJbe26yZ0X0IeRgldLOoV5PCIMHfkAiHNM422Rw/exec";
+const API_URL = "https://script.google.com/macros/s/AKfycbypQkhmRQSv2Wt_EVriZMTmEyVeG3YhN1DGePopQMB0TTVNrABkV6sJm2DMI3itbKxbPw/exec";
 
 document.addEventListener("DOMContentLoaded", function() {
   fetch(API_URL, {
     method: "POST",
-    headers: { "Content-Type": "text/plain" }, // Menggunakan text/plain untuk menghindari issue CORS preflight pada Google Script
+    headers: { "Content-Type": "text/plain" },
     body: JSON.stringify({ action: "getQuestions" })
   })
   .then(function(res) { return res.json(); })
@@ -371,7 +371,6 @@ function onQuestionsLoaded(response) {
   }
   allQuestions = response;
 
-  // Kelompokkan per dimensi
   var dimMap = {};
   var dimOrder = [];
   allQuestions.forEach(function(q) {
@@ -383,7 +382,7 @@ function onQuestionsLoaded(response) {
     return { name: d, icon: dimIcons[i % dimIcons.length], questions: dimMap[d] };
   });
 
-  totalSteps = 1 + dimensions.length; // step 0 = profil, lalu N dimensi
+  totalSteps = 1 + dimensions.length;
   document.getElementById("loadingPanel").style.display = "none";
   buildSteps();
   goToStep(0);
@@ -551,17 +550,14 @@ function getIndustryValue() {
 
 // ─── NAVIGATION ───────────────────────────────────────────────
 function goToStep(idx) {
-  // Sembunyikan semua panel
   var panels = document.querySelectorAll(".step-panel");
   panels.forEach(function(p) { p.classList.remove("active"); });
 
-  // Tampilkan panel target
   var target = document.getElementById("step-" + idx);
   if (!target) return;
   target.classList.add("active");
   currentStep = idx;
 
-  // Update progress bar
   var pct = Math.round((idx / totalSteps) * 100);
   document.getElementById("wizardFill").style.width = pct + "%";
 
@@ -589,7 +585,6 @@ function nextFromProfile() {
   chk("f-emp",     "err-emp");
   chk("f-revenue", "err-revenue");
 
-  // Validasi industry (select atau input manual)
   var industryVal = getIndustryValue();
   var errInd = document.getElementById("err-industry");
   if (!industryVal) { errInd.classList.add("show"); ok = false; }
@@ -600,29 +595,64 @@ function nextFromProfile() {
     if (firstErr) firstErr.scrollIntoView({ behavior: "smooth", block: "center" });
     return;
   }
-  goToStep(1);
-}
 
-function nextFromDim(stepIdx) {
-  // Tidak wajibkan jawaban — user bisa skip (default "No" saat submit)
-  goToStep(stepIdx + 1);
-}
-
-// ─── SUBMIT ───────────────────────────────────────────────────
-function submitAudit() {
-  var btn = document.getElementById("btnSubmit");
-  btn.disabled = true;
-  btn.innerHTML = '<span style="display:inline-block;width:16px;height:16px;border:3px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:rot .7s linear infinite;vertical-align:middle;margin-right:8px;"></span> Menganalisis...';
+  var nextBtn = document.querySelector("#step-0 .btn-next");
+  var originalText = nextBtn.innerHTML;
+  nextBtn.disabled = true;
+  nextBtn.innerHTML = "Menyimpan Data Perusahaan...";
 
   var profileObj = {
     companyName:    document.getElementById("f-company").value.trim(),
     email:          document.getElementById("f-email").value.trim(),
     whatsapp:       document.getElementById("f-wa").value.trim(),
-    industry:       getIndustryValue(),
+    industry:       industryVal,
     yearsOp:        document.getElementById("f-years").value.trim(),
     totalEmployees: document.getElementById("f-emp").value.trim(),
     revenue:        document.getElementById("f-revenue").value.trim()
   };
+
+  fetch(API_URL, {
+    method: "POST",
+    headers: { "Content-Type": "text/plain" },
+    body: JSON.stringify({
+      action: "saveInitialProfile",
+      profile: profileObj
+    })
+  })
+  .then(function(res) { return res.json(); })
+  .then(function(response) {
+    // Memperbaiki pembacaan data respons berstruktur { success: true, data: { auditId: "..." } }
+    if (response.success && response.data && response.data.auditId) {
+      currentAuditId = response.data.auditId; 
+      goToStep(1); 
+    } else {
+      throw new Error((response.data && response.data.error) || response.error || "Gagal menyimpan data awal");
+    }
+  })
+  .catch(function(e) {
+    alert("Gagal menyimpan data awal: " + e.message);
+  })
+  .finally(function() {
+    nextBtn.disabled = false;
+    nextBtn.innerHTML = originalText;
+  });
+}
+
+function nextFromDim(stepIdx) {
+  goToStep(stepIdx + 1);
+}
+
+// ─── SUBMIT ───────────────────────────────────────────────────
+function submitAudit() {
+  if (!currentAuditId) {
+    alert("Sesi audit kadaluarsa atau ID tidak ditemukan. Mohon kembali ke langkah awal.");
+    goToStep(0);
+    return;
+  }
+
+  var btn = document.getElementById("btnSubmit");
+  btn.disabled = true;
+  btn.innerHTML = '<span style="display:inline-block;width:16px;height:16px;border:3px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:rot .7s linear infinite;vertical-align:middle;margin-right:8px;"></span> Menganalisis...';
 
   var answersArray = [];
   allQuestions.forEach(function(q) {
@@ -634,14 +664,17 @@ function submitAudit() {
     answersArray.push({ id: q.id, value: val });
   });
 
+  // PEMBETULAN UTAMA: auditId diposisikan di Root Level objek JSON
+  var submitPayload = {
+    action: "submitAudit",
+    auditId: currentAuditId, 
+    answers: answersArray
+  };
+
   fetch(API_URL, {
     method: "POST",
     headers: { "Content-Type": "text/plain" },
-    body: JSON.stringify({
-      action: "submitAudit",
-      profile: profileObj,
-      answers: answersArray
-    })
+    body: JSON.stringify(submitPayload)
   })
   .then(function(res) { return res.json(); })
   .then(function(data) {
@@ -677,9 +710,9 @@ function showResults(results) {
     yearsOp:        document.getElementById("f-years").value.trim(),
     totalEmployees: document.getElementById("f-emp").value.trim(),
     revenue:        document.getElementById("f-revenue").value.trim(),
-    auditId:        results.auditId || ""
+    auditId:        results.auditId || currentAuditId || ""
   };
-  // Sembunyikan wizard
+
   document.getElementById("wizardBar").style.display      = "none";
   document.getElementById("stepsContainer").style.display = "none";
   document.getElementById("resultContainer").style.display = "block";
@@ -687,7 +720,6 @@ function showResults(results) {
   var score = parseFloat(results.grandScore);
   var cls   = score > 80 ? "excellent" : score >= 50 ? "moderate" : "critical";
 
-  // ── Share Card ──
   document.getElementById("scCompany").textContent  = _lastProfile.company  || "—";
   document.getElementById("scIndustry").textContent = _lastProfile.industry || "—";
 
@@ -697,7 +729,6 @@ function showResults(results) {
   else if (score >= 50) badgeEl.textContent = "⚠️ Needs Improvement";
   else                  badgeEl.textContent = "🚨 Critical — Risiko Tinggi";
 
-  // Mini bars per dimensi di share card
   var dimsEl = document.getElementById("scDims");
   dimsEl.innerHTML = "";
   results.breakdown.forEach(function(res) {
@@ -712,10 +743,8 @@ function showResults(results) {
     dimsEl.appendChild(row);
   });
 
-  // Animate score counter
   animateCount(document.getElementById("resScore"), 0, score, 1400);
 
-  // Animate mini bars (dengan delay agar counter selesai dulu)
   setTimeout(function() {
     dimsEl.querySelectorAll(".sc-dim-fill").forEach(function(bar) {
       bar.style.transition = "width 1s cubic-bezier(.22,1,.36,1)";
@@ -723,7 +752,6 @@ function showResults(results) {
     });
   }, 400);
 
-  // ── Detail Breakdown ──
   var bd = document.getElementById("resBreakdown");
   bd.innerHTML = "";
   results.breakdown.forEach(function(res, i) {
@@ -749,8 +777,6 @@ function showResults(results) {
   });
 
   window.scrollTo({ top: 0, behavior: "smooth" });
-
-  // Panggil AI insight setelah UI tampil
   loadAiInsight();
 }
 
@@ -760,7 +786,6 @@ function loadAiInsight() {
   document.getElementById("aiResult").style.display  = "none";
   document.getElementById("aiError").style.display   = "none";
 
-  // Kumpulkan pertanyaan + jawaban aktual per dimensi
   var answersDetail = [];
   allQuestions.forEach(function(q) {
     var radios = document.getElementsByName("q_" + q.id);
@@ -777,7 +802,7 @@ function loadAiInsight() {
 
   var insightPayload = {
     action:         "getAiInsight",
-    auditId:        _lastProfile.auditId        || "",
+    auditId:        _lastProfile.auditId        || currentAuditId || "",
     companyName:    _lastProfile.company        || "",
     industry:       _lastProfile.industry       || "",
     yearsOp:        _lastProfile.yearsOp        || "",
@@ -801,7 +826,6 @@ function loadAiInsight() {
       document.getElementById("aiErrorMsg").textContent = data.error || "Respons tidak valid";
       return;
     }
-    // Format **bold** → <strong>
     var formatted = data.data.insight
       .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
       .replace(/\n/g, "<br>");
@@ -873,7 +897,6 @@ function copyResult() {
       btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="width:18px;height:18px;"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg> Copy Teks';
     }, 2500);
   }).catch(function() {
-    // Fallback untuk browser lama
     var ta = document.createElement("textarea");
     ta.value = text;
     ta.style.position = "fixed"; ta.style.opacity = "0";
@@ -909,10 +932,8 @@ function showToast(msg) {
 
 // ─── RESET ────────────────────────────────────────────────────
 function resetWizard() {
-  // Reset state
-  allQuestions = []; dimensions = []; currentStep = 0;
+  allQuestions = []; dimensions = []; currentStep = 0; currentAuditId = null;
 
-  // Tampilkan ulang loading
   document.getElementById("resultContainer").style.display  = "none";
   document.getElementById("stepsContainer").style.display   = "block";
   document.getElementById("wizardBar").style.display        = "block";
@@ -922,7 +943,6 @@ function resetWizard() {
     '<p style="color:#64748b;font-weight:600;margin-bottom:6px;">Memuat framework evaluasi bisnis...</p>' +
     '<p style="color:#94a3b8;font-size:.83rem;">Mengambil daftar pertanyaan dari database</p>';
 
-  // Reload questions
   fetch(API_URL, {
     method: "POST",
     headers: { "Content-Type": "text/plain" },
@@ -944,7 +964,6 @@ function resetWizard() {
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
-// Helper to animate counting
 function animateCount(el, start, end, duration) {
   var startTime = null;
   function step(timestamp) {

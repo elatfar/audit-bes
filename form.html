@@ -679,6 +679,10 @@ function submitAudit() {
   .then(function(res) { return res.json(); })
   .then(function(data) {
     if (data.success) {
+      // ─── INSTALASI FACEBOOK PIXEL LEAD EVENT ───
+      if (typeof fbq === 'function') {
+        fbq('track', 'Lead');
+      }
       showResults(data.data);
     } else {
       throw new Error(data.error || "Gagal melakukan submit");
